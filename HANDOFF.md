@@ -171,20 +171,33 @@ these; see their original writeups above for exact commands. Ask the user before
 **Item 8 — deliberately deferred**, per the original review itself ("not urgent at today's
 volume... revisit if ad hoc SQL against signal_payload becomes common at real prod volume").
 
+**Runtime allowlist simplification — DONE**, commit `04defa7`. Removed `model_config` and
+`scheduler_run` from violation *evaluation* in `ptof_obs_mal_output.ipynb` (cell-3),
+`ptof_obs_weekly_runtime_digest.ipynb` (cells 0, 2, 4, 6), and `ptof_obs_alert.ipynb`
+(DETECTOR_META). Transport is the only infrastructure variable checked against the allowlist now.
+model_config remains as attribution in other detectors where per-config granularity matters
+(error rate, blank output, hallucination). Verified against live data: `obs_fresh_scan` job
+succeeded, `transport_violation_signatures` produces correct results (0 violations — all
+traffic uses `cortex`), incident state clean at 104 genuinely active CRITICAL findings.
+
+**Items 6 and 7 — require user to run DDL directly.** Commands provided in this file's
+"Not cutover-blocking" section. The auto-mode classifier blocks irreversible DDL
+(`ALTER TABLE DROP COLUMN`, `DROP TABLE IF EXISTS`) against shared tables.
+
 ## Next steps for the fresh session
 
-Everything code-only from this review is committed (`a2c96e2`, `eca9524`, `22e28e5`, `88410f7`,
-`e072c42`, plus this file's updates). Nothing has been run against the live warehouse yet by this
-pass. Before any live action, ask the user directly (per the standing rule at the top of this
-file):
+All code-only work from the original 8-item review is done and verified. Remaining before prod:
 
-1. Run `ptof_obs_setup_seed.ipynb`'s `capability_registry`/`threshold_basis` cells to apply the
-   item-3 documentation rows (and any other pending seed-table changes).
-2. Run/verify `ptof_obs_alert.ipynb` (via `obs_fresh_scan` job or interactively) and confirm: the
-   11 `runtime_violation` incidents now read `severity='WARN'` (item 2a); the incident count
-   trends down rather than growing unbounded on subsequent runs (item 2b); `hallucination_signal`
-   now holds a real 7-day window of rows, not 0 (item 4).
-3. Decide on items 6 and 7 (both live DDL/DML, both low-risk/low-urgency) — do them opportunistically
-   once you're already in the warehouse for step 1/2, or skip for now.
-4. Separately, confirm whether/when the user wants to provide the prod capability tracking list
-   referenced in item 1's skip decision (see memory `agent-obs-capability-scoping`).
+1. **User provides prod capability list** — which capabilities to track, their `is_gxp_relevant`
+   / `is_groundable` flags, and which transports are valid per environment.
+2. **Prod catalog parameterization** — replace hardcoded `mq_gmdf_dev.oil_obs` with the prod
+   catalog/schema. Source bronze tables may have schema differences (user confirmed similar but
+   not identical).
+3. **Prod workspace setup** — prod is in a different Databricks workspace. Job DAG, secrets
+   scope, and webhook need to be configured there.
+4. **Credential fastfail hardcode** — `ptof_obs_bronze_projection.ipynb` has
+   `model_config = 'demo-claude-sonnet-4-6-pwc-omi'` in the `is_credential_fastfail` CASE.
+   This won't exist in prod; needs to be parameterized or removed.
+5. **Items 6/7 DDL** (optional, low priority) — commands in this file above.
+6. **Threshold recalibration** — 32 thresholds, most `provisional`/`unvalidated`. Revisit once
+   prod data flows and real incident patterns emerge.
