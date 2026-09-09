@@ -139,32 +139,52 @@ pipeline integrates with prod data — **do not** add capability-registry-member
 `ptof_obs_mal_output.ipynb` cell-3) until that list is provided. See memory
 `agent-obs-capability-scoping` for full context if picking this up in a new session.
 
-**Item 2 — DONE**, commit `a2c96e2`. Added `t.severity = s.severity` to the `WHEN MATCHED`
-branch of `ptof_obs_alert.ipynb` cell-4's MERGE into `obs_incidents`. Pure code fix, no live-DB
-write yet — the 11 mis-severitized `runtime_violation` incidents in the live catalog will
-self-correct the next time `ptof_obs_alert.ipynb` runs (since that detector is still being
-re-detected each run). No auto-resolve logic was added (the other half of item 2) — still open,
-see below.
+**Item 2 — DONE, both halves.** (a) commit `a2c96e2`: added `t.severity = s.severity` to the
+`WHEN MATCHED` branch of `ptof_obs_alert.ipynb` cell-4's MERGE into `obs_incidents` — the 11
+mis-severitized `runtime_violation` incidents will self-correct next run. (b) commit `e072c42`:
+added a staleness-based auto-resolve cell immediately after the MERGE loop — any incident whose
+detector ran cleanly this run but didn't re-detect it now gets `resolved_at` stamped, excluding
+detectors that errored this run (tracked via `_skipped_detectors`) so a broken query can't be
+misread as "resolved." No auto-resolve for `acknowledged_at` — that remains hand-set by design.
 
 **Item 3 — DONE**, commit `eca9524`. Added `threshold_basis` rows (documentation only, no
 threshold values or detector logic changed) for all 12 checks flagged as missing: `blank_output`,
 `credential_outage`, `hallucination_unverified_rate`, `handover_delivery_new_failure`,
 `latency_anomaly_unreliable_baseline`, `latency_baseline_missing`, `latency_fixed_ceiling`,
 `nightly_baseline_staleness`, `pipeline_heartbeat`, `runtime_allowlist_populated`,
-`schema_field_missing`, `unacknowledged_critical`. Not yet applied to the live warehouse — the
-anti-join-guarded INSERT in `ptof_obs_setup_seed.ipynb` still needs to be run manually (ask the
-user first, per the standing rule above).
+`schema_field_missing`, `unacknowledged_critical`.
+
+**Item 4 — DONE**, commit `22e28e5`. `hallucination_signal`'s detection window
+(`ptof_obs_hallucination_detection.ipynb` cell-6) changed from `GREATEST(watermark, now()-7d)`
+to a stable `now() - INTERVAL 7 DAYS`, decoupled from the `_obs_watermark` bookkeeping that
+`faithfulness_scores`' incremental scoring uses. That watermark still governs only Layer-2
+scoring, not what's in scope for detection.
+
+**Item 5 — DONE**, commit `88410f7`. Added a `_sqlq()` escaping helper in
+`ptof_obs_alert.ipynb`'s `BACKTRACK` dict (cell-4) and applied it to every interpolated
+`capability`/`model_config`/`row_id` value across all 6 affected lambdas.
+
+**Items 6 and 7 — NOT YET DONE, both require a live warehouse action** (an `ALTER TABLE ...
+DROP COLUMN` and a set of `DROP TABLE IF EXISTS`, respectively) — code-only work is exhausted for
+these; see their original writeups above for exact commands. Ask the user before running either.
+
+**Item 8 — deliberately deferred**, per the original review itself ("not urgent at today's
+volume... revisit if ad hoc SQL against signal_payload becomes common at real prod volume").
 
 ## Next steps for the fresh session
 
-1. **Run `ptof_obs_setup_seed.ipynb`'s threshold_basis cell against the live warehouse** to apply
-   item 3's new rows (ask user first — this is a manual notebook run, not in the job DAG).
-2. **Run/verify `ptof_obs_alert.ipynb`** (via `obs_fresh_scan` job or interactively) and confirm
-   the 11 `runtime_violation` incidents in `obs_incidents` now read `severity='WARN'` (item 2's
-   auto-correct). Ask user first per the standing rule.
-3. **Item 2's second half is still open**: no auto-resolve path exists yet for
-   `resolved_at`/`acknowledged_at` — 235 open unacknowledged CRITICAL incidents will keep growing
-   unbounded. Needs a staleness-based auto-resolve design (see original item 2 writeup above).
-4. Items 4–8 (below) are unstarted. Ask the user for priority order on those, and separately
-   confirm whether/when they want to provide the prod capability tracking list referenced in
-   item 1's skip decision.
+Everything code-only from this review is committed (`a2c96e2`, `eca9524`, `22e28e5`, `88410f7`,
+`e072c42`, plus this file's updates). Nothing has been run against the live warehouse yet by this
+pass. Before any live action, ask the user directly (per the standing rule at the top of this
+file):
+
+1. Run `ptof_obs_setup_seed.ipynb`'s `capability_registry`/`threshold_basis` cells to apply the
+   item-3 documentation rows (and any other pending seed-table changes).
+2. Run/verify `ptof_obs_alert.ipynb` (via `obs_fresh_scan` job or interactively) and confirm: the
+   11 `runtime_violation` incidents now read `severity='WARN'` (item 2a); the incident count
+   trends down rather than growing unbounded on subsequent runs (item 2b); `hallucination_signal`
+   now holds a real 7-day window of rows, not 0 (item 4).
+3. Decide on items 6 and 7 (both live DDL/DML, both low-risk/low-urgency) — do them opportunistically
+   once you're already in the warehouse for step 1/2, or skip for now.
+4. Separately, confirm whether/when the user wants to provide the prod capability tracking list
+   referenced in item 1's skip decision (see memory `agent-obs-capability-scoping`).
